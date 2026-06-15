@@ -188,12 +188,6 @@ class PlayerActivity :
   private var playlistId: Int? = null
 
   /**
-   * Cached pre-resolved URI for the next item in the playlist.
-   */
-  private var preResolvedNextUri: String? = null
-  private var preResolvedNextItemKey: Uri? = null
-
-  /**
    * Tracks the starting offset of the loaded playlist window in the full playlist.
    */
   private var playlistWindowOffset: Int = 0
@@ -1173,7 +1167,7 @@ class PlayerActivity :
         val aspect = player.getVideoOutAspect()
         Log.d(TAG, "Video dimension changed: $property, aspect: $aspect")
         pipHelper.updatePictureInPictureParams()
-        if (playerPreferences.orientation.get() == PlayerOrientation.Video && aspect != null) {
+        if (playerPreferences.orientation.get() == PlayerOrientation.Video) {
           setOrientation()
         }
       }
@@ -1285,9 +1279,6 @@ class PlayerActivity :
     property: String,
     value: String,
   ) {
-    if (property == "user-data/mpvex/trigger_next_up" && value == "yes") {
-      viewModel.triggerNextUp()
-    }
   }
 
   internal fun onObserverEvent(_property: String) {}
@@ -1327,7 +1318,6 @@ class PlayerActivity :
     currentUri?.let { viewModel.calculateVideoHash(it) }
 
     viewModel.clearABLoop()
-    viewModel.dismissNextUp()
 
     progressSaveManager.resetTracking()
 
@@ -1513,8 +1503,9 @@ class PlayerActivity :
   }
 
   private fun applySubtitlePreferences() {
-    MPVLib.setPropertyString("sub-font", subtitlesPreferences.font.get())
-    MPVLib.setPropertyString("secondary-sub-font", subtitlesPreferences.font.get())
+    val font = subtitlesPreferences.font.get()
+    MPVLib.setPropertyString("sub-font", font)
+    MPVLib.setPropertyString("secondary-sub-font", font)
     MPVLib.setPropertyInt("sub-font-size", subtitlesPreferences.fontSize.get())
     MPVLib.setPropertyBoolean("sub-bold", subtitlesPreferences.bold.get())
     MPVLib.setPropertyBoolean("sub-italic", subtitlesPreferences.italic.get())
@@ -2289,18 +2280,8 @@ class PlayerActivity :
 
     lifecycleScope.launch(Dispatchers.Default) {
       // Step 1: Open content FD and load file as fast as possible
-      // Use pre-resolved URI if it matches the current request
-      val playableUri = if (preResolvedNextItemKey == uri && preResolvedNextUri != null) {
-        Log.d(TAG, "Using pre-resolved URI for $uri")
-        preResolvedNextUri!!
-      } else {
-        uri.openContentFd(this@PlayerActivity) ?: uri.toString()
-      }
+      val playableUri = uri.openContentFd(this@PlayerActivity) ?: uri.toString()
       MPVLib.command("loadfile", playableUri)
-
-      // Reset pre-resolved cache
-      preResolvedNextUri = null
-      preResolvedNextItemKey = null
 
       // Step 2: Handle heavy background tasks after engine has been poked
       setHttpHeadersForUri(uri)
@@ -2343,15 +2324,6 @@ class PlayerActivity :
         viewModel.refreshPlaylistItems()
       }
     }
-  }
-
-  fun preResolveNextItem(uri: Uri) {
-    if (preResolvedNextItemKey == uri) return
-
-    Log.d(TAG, "Pre-resolving next item: $uri")
-    val resolved = uri.openContentFd(this) ?: uri.toString()
-    preResolvedNextUri = resolved
-    preResolvedNextItemKey = uri
   }
 
   private fun formatTitle(title: String, isStream: Boolean = false): String {
@@ -2502,6 +2474,14 @@ class PlayerActivity :
     val uri = extractUriFromIntent(intent)
     return getMediaIdentifierFromUri(uri, fileName)
   }
+
+  /**
+   * Returns the persisted-playback-state identifier for an arbitrary playlist URI,
+   * mirroring how the currently-playing item's [mediaIdentifier] is derived so the
+   * playlist sheet can look up each item's watched state from the database.
+   */
+  internal fun getPlaylistItemMediaIdentifier(uri: Uri): String =
+    getMediaIdentifierFromUri(uri, getFileNameFromUri(uri))
 
   private fun getMediaIdentifierFromUri(uri: Uri?, fileName: String): String {
     if (uri == null) return fileName

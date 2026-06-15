@@ -64,17 +64,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -86,15 +82,6 @@ import app.marlboroadvance.mpvex.ui.player.RepeatMode
 import app.marlboroadvance.mpvex.ui.player.Sheets
 import app.marlboroadvance.mpvex.ui.player.controls.components.CurrentChapter
 import dev.vivvvek.seeker.Segment
-
-// ---------------------------------------------------------------------------
-// Shared press-animation spec — replaces the 8+ duplicated spring blocks
-// ---------------------------------------------------------------------------
-@Composable
-private fun pressSpec() = spring<Float>(
-  dampingRatio = Spring.DampingRatioMediumBouncy,
-  stiffness    = Spring.StiffnessLow,
-)
 
 // ---------------------------------------------------------------------------
 // Shared text style for value-display chips (Playback Speed, Decoder, Video Zoom)
@@ -193,16 +180,24 @@ fun RenderPlayerButton(
     }
 
     // ------------------------------------------------------------------
-    // VIDEO TITLE — Capsule Header
-    //   28dp pill · NOW PLAYING label + counter pill · ExtraBold title
-    //   with fade-edge marquee · single rounded mini-bar progress
-    //   soft bottom shadow · spring press-scale 0.97x
+    // VIDEO TITLE — Stable "Now Playing" capsule
+    //   28dp pill · neutral frosted glass (scrim + tint + rim) · NOW PLAYING label
+    //   (left) + accent counter pill (right) · ExtraBold single-line title (ellipsis
+    //   by default, marquee only when it actually overflows) · layer-free press
+    //   feedback · NO elevation shadow — hardware shadows show through translucent
+    //   fills as a dark rectangular core over the SurfaceView
+    //
+    //   No always-on graphicsLayer / basicMarquee: MPV draws to a SurfaceView,
+    //   and any persistent hardware/offscreen layer composited over it leaks
+    //   its rectangular bounds as a faint "box" seam. In the common case this
+    //   block is now pure layout + inline draws — nothing for the Surface to
+    //   seam against.
     // ------------------------------------------------------------------
     PlayerButton.VIDEO_TITLE -> {
       val playlistModeEnabled = viewModel.hasPlaylistSupport()
       val playlistInfo = viewModel.getPlaylistInfo()
 
-      // "current/total" → Pair<Int, Int> for the counter pill / mini-bar; null when no playlist.
+      // "current/total" → Pair<Int, Int> for the counter pill; null when no playlist.
       val playlistCounter = remember(playlistInfo) {
         playlistInfo
           ?.split("/")
@@ -217,14 +212,18 @@ fun RenderPlayerButton(
       val capsuleShape = RoundedCornerShape(28.dp)
       val interactionSource = remember { MutableInteractionSource() }
       val isPressed by interactionSource.collectIsPressedAsState()
-      // OxygenOS-style "soft squish": spring scale, MediumBouncy damping
-      val pressScale by animateFloatAsState(
-        targetValue   = if (isPressed) 0.97f else 1f,
+      // Frosted-glass press feedback: animate only the translucent neutral tint's
+      // alpha (rest → brighter on press) via inline background() draws — no
+      // graphicsLayer scale/alpha trick. Nothing allocates a hardware/offscreen
+      // layer, so there's no rectangular seam over the SurfaceView. The dark scrim
+      // base underneath keeps the small title text legible over any video frame.
+      val tintAlpha by animateFloatAsState(
+        targetValue   = if (isPressed) 0.60f else 0.45f,
         animationSpec = spring(
           dampingRatio = Spring.DampingRatioMediumBouncy,
           stiffness    = Spring.StiffnessLow,
         ),
-        label = "video_title_press_scale",
+        label = "video_title_glass_tint",
       )
 
       Row(
@@ -235,21 +234,28 @@ fun RenderPlayerButton(
         Column(
           modifier = Modifier
             .weight(1f, fill = false)
-            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
-            .then(
-              if (hideBackground) {
-                Modifier
-              } else {
-                Modifier.shadow(elevation = 6.dp, shape = capsuleShape, clip = false)
-              },
-            )
             .clip(capsuleShape)
             .then(
               if (hideBackground) {
                 Modifier
               } else {
+                // Neutral frosted glass, same recipe as the rest of the chrome: a
+                // dark scrim base (legibility) + a translucent surface tint gradient
+                // (the glass, brightening on press via tintAlpha) + a white rim-light
+                // edge. The accent stays reserved for the counter pill and the play
+                // hero, so the capsule reads as supporting glass, not a second focal.
                 Modifier
-                  .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f))
+                  .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.40f))
+                  .background(
+                    Brush.verticalGradient(
+                      listOf(
+                        MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = tintAlpha),
+                        MaterialTheme.colorScheme.surfaceContainerHighest.copy(
+                          alpha = (tintAlpha - 0.13f).coerceAtLeast(0f),
+                        ),
+                      ),
+                    ),
+                  )
                   .border(
                     width = 1.dp,
                     brush = Brush.verticalGradient(
@@ -279,8 +285,9 @@ fun RenderPlayerButton(
             .padding(horizontal = 18.dp, vertical = 10.dp),
           verticalArrangement = Arrangement.Center,
         ) {
-          // Header row: "NOW PLAYING" label (dim) + optional counter pill — sit snug
-          // next to each other, no fillMaxWidth + weight Spacer stretching them apart.
+          // Header row: "NOW PLAYING" label + optional counter pill, snug and
+          // left-grouped (no fillMaxWidth) so the capsule's width is driven by
+          // the title, not stretched to the full available width.
           Row(
             verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -308,49 +315,32 @@ fun RenderPlayerButton(
 
           Spacer(modifier = Modifier.height(2.dp))
 
-          var isTitleOverflowing by remember { mutableStateOf(false) }
+          // Latch overflow once per title: ellipsis first, then switch to
+          // marquee. Latch-only (never reset to false here) so the two layout
+          // passes can't oscillate; remember is keyed on the title so a new
+          // (possibly shorter) title re-evaluates from scratch.
+          var isTitleOverflowing by remember(mediaTitle) { mutableStateOf(false) }
 
           Text(
             text  = mediaTitle ?: "",
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
-            onTextLayout = { isTitleOverflowing = it.hasVisualOverflow },
+            overflow = if (isTitleOverflowing) TextOverflow.Clip else TextOverflow.Ellipsis,
+            onTextLayout = { if (it.hasVisualOverflow) isTitleOverflowing = true },
             modifier = Modifier
               .widthIn(max = 280.dp)
               .then(
                 if (isTitleOverflowing) {
-                  Modifier
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                      drawContent()
-                      val fadeWidth = 10.dp.toPx().coerceAtMost(size.width / 2f)
-                      drawRect(
-                        brush = Brush.horizontalGradient(
-                          colors = listOf(Color.Transparent, Color.Black),
-                          startX = 0f,
-                          endX   = fadeWidth,
-                        ),
-                        blendMode = BlendMode.DstIn,
-                      )
-                      drawRect(
-                        brush = Brush.horizontalGradient(
-                          colors = listOf(Color.Black, Color.Transparent),
-                          startX = size.width - fadeWidth,
-                          endX   = size.width,
-                        ),
-                        blendMode = BlendMode.DstIn,
-                      )
-                    }
+                  Modifier.basicMarquee(
+                    iterations         = Int.MAX_VALUE,
+                    initialDelayMillis = 1500,
+                    repeatDelayMillis  = 1500,
+                    spacing            = MarqueeSpacing(48.dp),
+                  )
                 } else {
                   Modifier
                 },
-              )
-              .basicMarquee(
-                iterations         = Int.MAX_VALUE,
-                initialDelayMillis = 1500,
-                repeatDelayMillis  = 1500,
-                spacing            = MarqueeSpacing(48.dp),
               ),
           )
         }

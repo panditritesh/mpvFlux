@@ -54,7 +54,7 @@ object PreferencesScreen : Screen {
             modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
             containerColor = if (isDark) Color.Black else MaterialTheme.colorScheme.surface,
             topBar = {
-                TopAppBar(
+                PreferenceTopBar(
                     title = {
                         Text(
                             text = stringResource(R.string.pref_preferences),
@@ -73,11 +73,7 @@ object PreferencesScreen : Screen {
                         }
                     },
                     scrollBehavior = scrollBehavior,
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        titleContentColor = MaterialTheme.colorScheme.primary
-                    )
+                    containerColor = if (isDark) Color.Black else MaterialTheme.colorScheme.surface,
                 )
             }
         ) { padding ->
@@ -169,6 +165,12 @@ object PreferencesScreen : Screen {
                 item { PreferenceSectionHeader(title = "System & Info") }
                 item {
                     PreferenceCard {
+                        PreferenceItem(
+                            title = stringResource(R.string.pref_storage_title),
+                            summary = stringResource(R.string.pref_storage_summary),
+                            icon = { PreferenceIcon(Icons.Rounded.Storage, containerColor = MaterialTheme.colorScheme.surfaceContainerHighest) },
+                            onClick = { backstack.add(StorageScreen) }
+                        )
                         PreferenceItem(
                             title = stringResource(R.string.pref_advanced),
                             summary = stringResource(R.string.pref_advanced_summary),
